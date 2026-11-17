@@ -70,7 +70,7 @@ export async function claimUniquePlanetName(
     return {
       ok: false,
       error: 'NO_BACKEND_URL',
-      message: 'Geen backend-server geconfigureerd. Stel je Node/Cloudflare URL in bij Highscores.',
+      message: 'Offline mode active — saved locally on this device.',
     };
   }
 
@@ -92,7 +92,7 @@ export async function claimUniquePlanetName(
     return {
       ok: false,
       error: 'NETWORK_ERROR',
-      message: 'Kan geen verbinding maken met de highscore-server.',
+      message: 'Could not reach the online leaderboard right now.',
     };
   }
 }

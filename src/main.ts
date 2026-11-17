@@ -25,10 +25,13 @@ type ScreenName = 'home' | 'colors' | 'game' | 'highscores';
 
 let state: GameState;
 let currentScreen: ScreenName = 'home';
+let colorsReturnScreen: 'home' | 'game' = 'home';
 let stage: PlanetStage | null = null;
 let syncTimeout: number | null = null;
 let hsPollInterval: number | null = null;
 let homeAnimId: number | null = null;
+let hsTapCount = 0;
+let hsTapTimer: number | null = null;
 
 function renderMassHtml(m: number, e: number): string {
   const parts = formatMassParts({ m, e });
@@ -58,25 +61,24 @@ function buildApp(): void {
       <div class="home-hero">
         <canvas id="home-planet-canvas" class="home-planet-canvas"></canvas>
         <h1 class="game-title">Click Planet</h1>
-        <p class="game-subtitle">
-          Kies jouw planeetkleur, tap op je planeet &amp; grijp passerende meteorieten voor eindeloze massa.
-        </p>
+        <p class="game-subtitle">Tap planets &amp; catch meteorites.</p>
         <div id="home-save-pill" class="home-save-pill hidden"></div>
       </div>
       <div class="home-actions">
         <button id="btn-home-play" class="btn btn-primary">Play</button>
-        <button id="btn-home-highscores" class="btn btn-secondary">Highscores</button>
+        <button id="btn-home-colors" class="btn btn-secondary">Planet Colors</button>
+        <button id="btn-home-highscores" class="btn btn-secondary">Leaderboard</button>
       </div>
     </section>
 
     <!-- 20 PLANET COLORS SCREEN -->
     <section id="screen-colors" class="screen colors-screen hidden">
       <div class="top-nav">
-        <button id="btn-colors-back" class="btn btn-small">← Terug</button>
-        <h2 class="screen-heading">Kies Planeetkleur</h2>
+        <button id="btn-colors-back" class="btn btn-small">← Back</button>
+        <h2 class="screen-heading">Planet Colors</h2>
         <span style="width:64px"></span>
       </div>
-      <p class="colors-subtitle">Kies 1 van de 20 kleuren om te spelen:</p>
+      <p class="colors-subtitle">Pick 1 of 20 planet styles:</p>
       <div id="color-grid" class="color-grid"></div>
     </section>
 
@@ -86,68 +88,61 @@ function buildApp(): void {
         <div class="game-nav-row">
           <button id="btn-game-menu" class="btn btn-small">← Menu</button>
           <div class="game-nav-right">
-            <button id="btn-game-colors" class="btn btn-small">Kleuren</button>
-            <button id="btn-game-sound" class="btn btn-small">Geluid: Aan</button>
+            <button id="btn-game-colors" class="btn btn-small">Colors</button>
+            <button id="btn-game-sound" class="btn btn-small">🔊 On</button>
           </div>
         </div>
 
         <div class="mass-panel">
-          <span class="mass-label">Massa</span>
+          <span class="mass-label">Mass</span>
           <div id="mass-value" class="mass-value">0.01 kg</div>
-          <div id="mass-rate-badge" class="mass-rate-badge">Eerste 10 clicks: +4–5 kg (0/10)</div>
-        </div>
-
-        <div class="name-claim-box">
-          <form id="name-claim-form" class="name-input-row">
-            <input
-              id="planet-name-input"
-              class="name-input"
-              type="text"
-              maxlength="20"
-              autocomplete="off"
-              placeholder="Unieke planeetnaam..."
-            />
-            <button id="btn-claim-name" class="btn btn-claim" type="submit">Claim</button>
-          </form>
-          <div id="name-status" class="name-status"></div>
+          <div id="mass-rate-badge" class="mass-rate-badge">First 10 taps: +4–5 kg (0/10)</div>
         </div>
       </header>
 
       <div class="stage-wrap">
         <canvas id="planet-stage-canvas" class="stage-canvas"></canvas>
       </div>
-
-      <footer class="game-footer">
-        <p class="motto-text">Most MASS Just TAP</p>
-      </footer>
     </section>
 
-    <!-- HIGHSCORES SCREEN -->
+    <!-- LEADERBOARD SCREEN -->
     <section id="screen-highscores" class="screen highscores-screen hidden">
       <div class="top-nav">
-        <button id="btn-hs-back" class="btn btn-small">← Terug</button>
-        <h2 class="screen-heading">Globale Highscores</h2>
-        <button id="btn-hs-refresh" class="btn btn-small">Vernieuw</button>
+        <button id="btn-hs-back" class="btn btn-small">← Back</button>
+        <h2 id="hs-heading" class="screen-heading">🏆 Leaderboard</h2>
+        <button id="btn-hs-refresh" class="btn btn-small">Refresh</button>
       </div>
 
       <div class="hs-status-bar">
-        <span id="hs-status-text">Verbinden met globale server...</span>
-        <button id="btn-hs-config" class="btn btn-small">Server</button>
+        <span id="hs-status-text">📱 Offline Mode — Local Highscores</span>
       </div>
 
       <div id="hs-config-panel" class="hs-config-panel hidden">
-        <p class="hs-config-help">
-          Vul de URL van je Click Planet backend in (Cloudflare Worker of Node.js server) voor globale synchronisatie.
-        </p>
+        <p class="hs-config-help">Developer Endpoint URL</p>
         <div class="name-input-row">
           <input
             id="api-url-input"
             class="name-input"
             type="url"
-            placeholder="https://click-planet-api.workers.dev"
+            placeholder="https://api.example.com"
           />
-          <button id="btn-save-api-url" class="btn btn-claim" type="button">Opslaan</button>
+          <button id="btn-save-api-url" class="btn btn-claim" type="button">Save</button>
         </div>
+      </div>
+
+      <div class="name-claim-box">
+        <form id="name-claim-form" class="name-input-row">
+          <input
+            id="planet-name-input"
+            class="name-input"
+            type="text"
+            maxlength="20"
+            autocomplete="off"
+            placeholder="Unique planet name..."
+          />
+          <button id="btn-claim-name" class="btn btn-claim" type="submit">Claim Name</button>
+        </form>
+        <div id="name-status" class="name-status"></div>
       </div>
 
       <div id="hs-list" class="hs-list"></div>
@@ -163,11 +158,12 @@ function buildApp(): void {
 function populateColorGrid(): void {
   const grid = document.getElementById('color-grid')!;
   grid.innerHTML = '';
+  const selectedId = state.colorId ?? 1;
 
   for (const p of PLANET_COLORS) {
     const card = document.createElement('button');
     card.type = 'button';
-    card.className = `color-card${state.colorId === p.id ? ' selected' : ''}`;
+    card.className = `color-card${selectedId === p.id ? ' selected' : ''}`;
     card.dataset.colorId = String(p.id);
 
     const cvs = document.createElement('canvas');
@@ -194,9 +190,10 @@ function populateColorGrid(): void {
 }
 
 function updateColorGridSelection(): void {
+  const selectedId = state.colorId ?? 1;
   const cards = document.querySelectorAll<HTMLButtonElement>('.color-card');
   cards.forEach((c) => {
-    c.classList.toggle('selected', Number(c.dataset.colorId) === state.colorId);
+    c.classList.toggle('selected', Number(c.dataset.colorId) === selectedId);
   });
 }
 
@@ -221,6 +218,7 @@ function showScreen(target: ScreenName): void {
   } else if (target === 'highscores') {
     stopHomePreview();
     stopGameStage();
+    updateNameClaimUI();
     void loadHighscores();
     startHighscorePolling();
   } else if (target === 'home') {
@@ -291,7 +289,7 @@ function refreshHomeSummary(): void {
 
 function startGameStage(): void {
   const canvas = document.getElementById('planet-stage-canvas') as HTMLCanvasElement;
-  const planet = getPlanetColor(state.colorId ?? 0);
+  const planet = getPlanetColor(state.colorId ?? 1);
 
   if (stage) {
     stage.setPlanet(planet);
@@ -339,9 +337,9 @@ function updateMassDisplay(): void {
   }
   if (rateEl) {
     if (state.clickCount < 10) {
-      rateEl.textContent = `Eerste 10 clicks: +4–5 kg (${state.clickCount}/10)`;
+      rateEl.textContent = `First 10 taps: +4–5 kg (${state.clickCount}/10)`;
     } else {
-      rateEl.textContent = `+0.01% per click • Meteorieten schalen mee`;
+      rateEl.textContent = `+0.01% per tap • Meteors scale up`;
     }
   }
 }
@@ -349,23 +347,29 @@ function updateMassDisplay(): void {
 function updateGameUI(): void {
   updateMassDisplay();
   const soundBtn = document.getElementById('btn-game-sound')!;
-  soundBtn.textContent = state.soundEnabled ? 'Geluid: Aan' : 'Geluid: Uit';
+  soundBtn.textContent = state.soundEnabled ? '🔊 On' : '🔇 Off';
+}
 
-  const input = document.getElementById('planet-name-input') as HTMLInputElement;
-  input.value = state.planetName;
+function updateNameClaimUI(): void {
+  const input = document.getElementById('planet-name-input') as HTMLInputElement | null;
+  const status = document.getElementById('name-status');
+  if (!input || !status) return;
 
-  const status = document.getElementById('name-status')!;
+  if (document.activeElement !== input) {
+    input.value = state.planetName;
+  }
+
   if (state.planetName && state.nameClaimed) {
     status.className = 'name-status ok';
-    status.textContent = `✓ "${state.planetName}" is gekoppeld aan jouw telefoon`;
+    status.textContent = `✓ "${state.planetName}" is linked to your device`;
   } else if (state.planetName) {
     status.className = 'name-status';
     status.textContent = state.apiBaseUrl
-      ? 'Klik Claim om deze naam wereldwijd aan je telefoon te koppelen.'
-      : 'Lokaal opgeslagen (koppel backend bij Highscores voor wereldwijde check).';
+      ? 'Tap Claim Name to register on the online leaderboard.'
+      : 'Saved locally on this device.';
   } else {
     status.className = 'name-status';
-    status.textContent = 'Kies een unieke planeetnaam (gekoppeld aan jouw telefoon).';
+    status.textContent = 'Choose a unique planet name for the leaderboard.';
   }
 }
 
@@ -379,7 +383,7 @@ function scheduleScoreSync(delayMs: number): void {
     void submitHighestMass(state.apiBaseUrl, {
       deviceId: state.deviceId,
       planetName: state.planetName,
-      colorId: state.colorId ?? 0,
+      colorId: state.colorId ?? 1,
       mass: state.highestMass,
     });
   }, delayMs);
@@ -393,29 +397,31 @@ async function handleClaimName(): Promise<void> {
 
   if (rawName.length < 2 || rawName.length > 20 || !/^[a-zA-Z0-9 _-]+$/.test(rawName)) {
     status.className = 'name-status err';
-    status.textContent = 'Gebruik 2–20 tekens (letters, cijfers, spatie, - of _).';
+    status.textContent = 'Use 2–20 characters (letters, numbers, space, - or _).';
     return;
   }
 
   state.planetName = rawName;
   saveState(state);
+  refreshHomeSummary();
 
   if (!state.apiBaseUrl) {
     state.nameClaimed = false;
     saveState(state);
     status.className = 'name-status ok';
-    status.textContent = `Lokaal opgeslagen als "${rawName}" (stel server URL in bij Highscores).`;
+    status.textContent = `Saved locally as "${rawName}".`;
+    renderHighscoreRows(buildLocalFallbackEntry());
     return;
   }
 
   btn.disabled = true;
   status.className = 'name-status';
-  status.textContent = 'Controleren & koppelen aan telefoon...';
+  status.textContent = 'Checking & claiming name...';
 
   const result = await claimUniquePlanetName(state.apiBaseUrl, {
     deviceId: state.deviceId,
     planetName: rawName,
-    colorId: state.colorId ?? 0,
+    colorId: state.colorId ?? 1,
     mass: state.highestMass,
   });
 
@@ -427,44 +433,47 @@ async function handleClaimName(): Promise<void> {
     saveState(state);
     input.value = result.entry.planetName;
     status.className = 'name-status ok';
-    status.textContent = `✓ "${result.entry.planetName}" gekoppeld! (Rang #${result.entry.rank})`;
+    status.textContent = `✓ "${result.entry.planetName}" claimed! (Rank #${result.entry.rank})`;
+    refreshHomeSummary();
+    void loadHighscores();
   } else {
     state.nameClaimed = false;
     saveState(state);
     status.className = 'name-status err';
-    status.textContent = result.message || 'Naam is al bezet of server niet bereikbaar.';
+    status.textContent = result.message || 'Name is already taken or unavailable.';
   }
 }
 
 async function loadHighscores(): Promise<void> {
   const statusEl = document.getElementById('hs-status-text')!;
   const apiInput = document.getElementById('api-url-input') as HTMLInputElement;
-  apiInput.value = state.apiBaseUrl;
+  if (document.activeElement !== apiInput) {
+    apiInput.value = state.apiBaseUrl;
+  }
 
   if (!state.apiBaseUrl) {
-    statusEl.textContent = 'Geen globale server ingesteld (lokale weergave)';
+    statusEl.textContent = '📱 Offline Mode — Local Highscores';
     renderHighscoreRows(buildLocalFallbackEntry());
     return;
   }
 
-  statusEl.textContent = 'Highscores laden...';
+  statusEl.textContent = 'Loading leaderboard...';
 
   try {
-    // Push latest highest mass first if player has claimed a name
     if (state.planetName.trim()) {
       await submitHighestMass(state.apiBaseUrl, {
         deviceId: state.deviceId,
         planetName: state.planetName,
-        colorId: state.colorId ?? 0,
+        colorId: state.colorId ?? 1,
         mass: state.highestMass,
       });
     }
 
     const res = await fetchGlobalHighscores(state.apiBaseUrl, state.deviceId, 50);
-    statusEl.textContent = `Live verbonden • ${res.entries.length} planeten`;
+    statusEl.textContent = `🌐 Online Leaderboard • ${res.entries.length} planets`;
     renderHighscoreRows(res.entries);
   } catch {
-    statusEl.textContent = 'Server niet bereikbaar (offline modus)';
+    statusEl.textContent = '📱 Offline Mode — Local Highscores';
     renderHighscoreRows(buildLocalFallbackEntry());
   }
 }
@@ -475,8 +484,8 @@ function buildLocalFallbackEntry(): HighscoreEntry[] {
     {
       rank: 1,
       deviceId: state.deviceId,
-      planetName: state.planetName || 'Jouw Planeet (naamloos)',
-      colorId: state.colorId ?? 0,
+      planetName: state.planetName || 'Your Planet (Unnamed)',
+      colorId: state.colorId ?? 1,
       massM: state.highestMass.m,
       massE: state.highestMass.e,
       updatedAt: new Date().toISOString(),
@@ -489,8 +498,8 @@ function renderHighscoreRows(entries: HighscoreEntry[]): void {
   if (entries.length === 0) {
     listEl.innerHTML = `
       <div class="hs-empty">
-        Nog geen highscores gevonden.<br/>
-        Kies een planeetkleur, tap op je planeet en claim een unieke planeetnaam!
+        No highscores yet.<br/>
+        Tap your planet and claim a unique planet name!
       </div>
     `;
     return;
@@ -519,7 +528,7 @@ function renderHighscoreRows(entries: HighscoreEntry[]): void {
 
     const sub = document.createElement('div');
     sub.className = 'hs-sub';
-    sub.textContent = isMe ? 'Jouw telefoon' : getPlanetColor(item.colorId).name;
+    sub.textContent = isMe ? 'Your Device' : getPlanetColor(item.colorId).name;
 
     nameCol.appendChild(name);
     nameCol.appendChild(sub);
@@ -557,7 +566,12 @@ function stopHighscorePolling(): void {
 function wireEvents(): void {
   document.getElementById('btn-home-play')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    // Always let the player choose 1 of 20 planet colors first
+    showScreen('game');
+  });
+
+  document.getElementById('btn-home-colors')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    colorsReturnScreen = 'home';
     showScreen('colors');
   });
 
@@ -568,7 +582,7 @@ function wireEvents(): void {
 
   document.getElementById('btn-colors-back')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    showScreen('home');
+    showScreen(colorsReturnScreen);
   });
 
   document.getElementById('btn-game-menu')!.addEventListener('click', () => {
@@ -578,6 +592,7 @@ function wireEvents(): void {
 
   document.getElementById('btn-game-colors')!.addEventListener('click', () => {
     soundFX.playUiTap();
+    colorsReturnScreen = 'game';
     showScreen('colors');
   });
 
@@ -605,9 +620,22 @@ function wireEvents(): void {
     void loadHighscores();
   });
 
-  document.getElementById('btn-hs-config')!.addEventListener('click', () => {
-    soundFX.playUiTap();
-    document.getElementById('hs-config-panel')!.classList.toggle('hidden');
+  document.getElementById('hs-heading')!.addEventListener('click', () => {
+    hsTapCount += 1;
+    if (hsTapTimer !== null) {
+      window.clearTimeout(hsTapTimer);
+    }
+    if (hsTapCount >= 5) {
+      hsTapCount = 0;
+      hsTapTimer = null;
+      soundFX.playUiTap();
+      document.getElementById('hs-config-panel')!.classList.toggle('hidden');
+      return;
+    }
+    hsTapTimer = window.setTimeout(() => {
+      hsTapCount = 0;
+      hsTapTimer = null;
+    }, 2000);
   });
 
   document.getElementById('btn-save-api-url')!.addEventListener('click', () => {
@@ -616,6 +644,7 @@ function wireEvents(): void {
     state.apiBaseUrl = input.value.trim().replace(/\/+$/, '');
     saveState(state);
     document.getElementById('hs-config-panel')!.classList.add('hidden');
+    updateNameClaimUI();
     void loadHighscores();
   });
 }
@@ -628,7 +657,6 @@ async function bootstrap(): Promise<void> {
   buildApp();
   showScreen('home');
 
-  // If backend is configured, sync any existing device profile
   if (state.apiBaseUrl) {
     const profile = await fetchPlayerProfile(state.apiBaseUrl, state.deviceId).catch(() => null);
     if (profile) {
@@ -640,6 +668,7 @@ async function bootstrap(): Promise<void> {
       );
       saveState(state);
       refreshHomeSummary();
+      updateNameClaimUI();
     }
   }
 }

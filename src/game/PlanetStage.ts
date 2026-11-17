@@ -503,7 +503,7 @@ export class PlanetStage {
       const t = ft.life / ft.maxLife;
       ctx.save();
       ctx.globalAlpha = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8;
-      ctx.font = `700 ${Math.round(16 * ft.scale)}px "JetBrains Mono", monospace`;
+      ctx.font = `700 ${Math.round(16 * ft.scale)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(2, 6, 23, 0.75)';
       ctx.fillText(ft.text, ft.x + 1, ft.y + 1.5);
