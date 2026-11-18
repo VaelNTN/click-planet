@@ -6,6 +6,7 @@ import {
   formatDeltaShort,
   formatMassParts,
   formatMassString,
+  getMassLog10,
   maxMass,
   normalizeMass,
 } from './math/bigMass';
@@ -28,7 +29,11 @@ let currentScreen: ScreenName = 'home';
 let colorsReturnScreen: 'home' | 'game' = 'home';
 let stage: PlanetStage | null = null;
 let syncTimeout: number | null = null;
+let scoreDirty = false;
+let syncInFlight = false;
+let lastScoreSyncAt = 0;
 let hsPollInterval: number | null = null;
+let hsLoadSeq = 0;
 let homeAnimId: number | null = null;
 let hsTapCount = 0;
 let hsTapTimer: number | null = null;
@@ -42,12 +47,14 @@ function renderMassHtml(m: number, e: number): string {
 }
 
 function renderMiniPlanetCanvas(canvas: HTMLCanvasElement, colorId: number, size: number): void {
+  if (size <= 0) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = size * dpr;
-  canvas.height = size * dpr;
+  canvas.width = Math.round(size * dpr);
+  canvas.height = Math.round(size * dpr);
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
   const planet = getPlanetColor(colorId);
   const r = planet.hasRing ? size * 0.27 : size * 0.36;
   drawPlanet(ctx, size / 2, size / 2, r, planet, 0.22);
@@ -198,6 +205,7 @@ function updateColorGridSelection(): void {
 }
 
 function showScreen(target: ScreenName): void {
+  const prevScreen = currentScreen;
   currentScreen = target;
   const screens: Record<ScreenName, HTMLElement> = {
     home: document.getElementById('screen-home')!,
@@ -210,6 +218,10 @@ function showScreen(target: ScreenName): void {
     screens[name].classList.toggle('hidden', name !== target);
   });
 
+  if (prevScreen === 'game' && target !== 'game') {
+    void flushScoreSync();
+  }
+
   if (target === 'game') {
     stopHomePreview();
     stopHighscorePolling();
@@ -219,7 +231,7 @@ function showScreen(target: ScreenName): void {
     stopHomePreview();
     stopGameStage();
     updateNameClaimUI();
-    void loadHighscores();
+    void loadHighscores(false);
     startHighscorePolling();
   } else if (target === 'home') {
     stopGameStage();
@@ -240,29 +252,42 @@ function startHomePreview(): void {
   if (!canvas) return;
 
   const size = 168;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = size * dpr;
-  canvas.height = size * dpr;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(size * dpr);
+  canvas.height = Math.round(size * dpr);
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
   let phase = 0;
+  let elapsed = 0;
   let last = performance.now();
   const tick = (now: number) => {
     if (currentScreen !== 'home') {
       homeAnimId = null;
       return;
     }
-    const dt = (now - last) / 1000;
+    const rawDt = (now - last) / 1000;
+    const dt = Number.isFinite(rawDt) ? Math.min(0.05, Math.max(0.001, rawDt)) : 0.016;
     last = now;
     phase += dt * 0.06;
+    elapsed += dt;
 
-    ctx.save();
+    const currentDpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (currentDpr !== dpr) {
+      dpr = currentDpr;
+      canvas.width = Math.round(size * dpr);
+      canvas.height = Math.round(size * dpr);
+    }
+
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
     const planet = getPlanetColor(state.colorId ?? 1);
-    drawPlanet(ctx, size / 2, size / 2, planet.hasRing ? 48 : 60, planet, phase);
-    ctx.restore();
+    const evolution = Math.max(0, getMassLog10(state.highestMass) + 2);
+    const baseR = evolution >= 4.2 ? (planet.hasRing ? 38 : 40) : planet.hasRing ? 46 : 56;
+    drawPlanet(ctx, size / 2, size / 2, baseR, planet, phase, {
+      evolution,
+      timeSec: elapsed,
+    });
 
     homeAnimId = requestAnimationFrame(tick);
   };
@@ -293,33 +318,41 @@ function startGameStage(): void {
 
   if (stage) {
     stage.setPlanet(planet);
+    stage.setMass(state.mass);
     stage.start();
     return;
   }
 
-  stage = new PlanetStage(canvas, planet, {
-    onPlanetTap: () => {
-      const { newMass, deltaMass } = computePlanetClickGain(state.mass, state.clickCount);
-      state.mass = newMass;
-      state.highestMass = maxMass(state.highestMass, newMass);
-      state.clickCount += 1;
-      saveState(state);
-      soundFX.playPlanetTap();
-      updateMassDisplay();
-      scheduleScoreSync(2000);
-      return formatDeltaShort(deltaMass);
+  stage = new PlanetStage(
+    canvas,
+    planet,
+    {
+      onPlanetTap: () => {
+        const { newMass, deltaMass } = computePlanetClickGain(state.mass, state.clickCount);
+        state.mass = newMass;
+        state.highestMass = maxMass(state.highestMass, newMass);
+        state.clickCount += 1;
+        saveState(state);
+        stage?.setMass(state.mass);
+        soundFX.playPlanetTap();
+        updateMassDisplay();
+        scheduleScoreSync(1600);
+        return formatDeltaShort(deltaMass);
+      },
+      onMeteoriteAbsorb: () => {
+        const { newMass, deltaMass } = computeMeteoriteGain(state.mass);
+        state.mass = newMass;
+        state.highestMass = maxMass(state.highestMass, newMass);
+        saveState(state);
+        stage?.setMass(state.mass);
+        soundFX.playMeteorAbsorb();
+        updateMassDisplay();
+        scheduleScoreSync(1000);
+        return formatDeltaShort(deltaMass);
+      },
     },
-    onMeteoriteAbsorb: () => {
-      const { newMass, deltaMass } = computeMeteoriteGain(state.mass);
-      state.mass = newMass;
-      state.highestMass = maxMass(state.highestMass, newMass);
-      saveState(state);
-      soundFX.playMeteorAbsorb();
-      updateMassDisplay();
-      scheduleScoreSync(1200);
-      return formatDeltaShort(deltaMass);
-    },
-  });
+    state.mass
+  );
   stage.start();
 }
 
@@ -374,19 +407,56 @@ function updateNameClaimUI(): void {
 }
 
 function scheduleScoreSync(delayMs: number): void {
+  scoreDirty = true;
   if (!state.apiBaseUrl || !state.planetName.trim()) return;
+
+  // Avoid starving sync forever during continuous tapping
+  const elapsed = Date.now() - lastScoreSyncAt;
+  if (elapsed >= 4500 && !syncInFlight) {
+    void flushScoreSync();
+    return;
+  }
+
   if (syncTimeout !== null) {
     window.clearTimeout(syncTimeout);
   }
   syncTimeout = window.setTimeout(() => {
     syncTimeout = null;
-    void submitHighestMass(state.apiBaseUrl, {
+    void flushScoreSync();
+  }, delayMs);
+}
+
+async function flushScoreSync(): Promise<void> {
+  if (syncTimeout !== null) {
+    window.clearTimeout(syncTimeout);
+    syncTimeout = null;
+  }
+  if (!scoreDirty || syncInFlight || !state.apiBaseUrl || !state.planetName.trim()) {
+    return;
+  }
+
+  syncInFlight = true;
+  lastScoreSyncAt = Date.now();
+  const submittedMass = { ...state.highestMass };
+  try {
+    const res = await submitHighestMass(state.apiBaseUrl, {
       deviceId: state.deviceId,
       planetName: state.planetName,
       colorId: state.colorId ?? 1,
-      mass: state.highestMass,
+      mass: submittedMass,
     });
-  }, delayMs);
+    if (res.ok) {
+      // Only clear dirty if no newer mass arrived while request was in flight
+      if (
+        state.highestMass.e === submittedMass.e &&
+        state.highestMass.m === submittedMass.m
+      ) {
+        scoreDirty = false;
+      }
+    }
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 async function handleClaimName(): Promise<void> {
@@ -430,12 +500,15 @@ async function handleClaimName(): Promise<void> {
   if (result.ok && result.entry) {
     state.planetName = result.entry.planetName;
     state.nameClaimed = true;
+    scoreDirty = false;
     saveState(state);
     input.value = result.entry.planetName;
     status.className = 'name-status ok';
     status.textContent = `✓ "${result.entry.planetName}" claimed! (Rank #${result.entry.rank})`;
     refreshHomeSummary();
-    void loadHighscores();
+    if (currentScreen === 'highscores') {
+      void loadHighscores(false);
+    }
   } else {
     state.nameClaimed = false;
     saveState(state);
@@ -444,7 +517,8 @@ async function handleClaimName(): Promise<void> {
   }
 }
 
-async function loadHighscores(): Promise<void> {
+async function loadHighscores(isPoll = false): Promise<void> {
+  const mySeq = ++hsLoadSeq;
   const statusEl = document.getElementById('hs-status-text')!;
   const apiInput = document.getElementById('api-url-input') as HTMLInputElement;
   if (document.activeElement !== apiInput) {
@@ -457,22 +531,30 @@ async function loadHighscores(): Promise<void> {
     return;
   }
 
-  statusEl.textContent = 'Loading leaderboard...';
+  if (!isPoll) {
+    statusEl.textContent = 'Loading leaderboard...';
+  }
 
   try {
-    if (state.planetName.trim()) {
-      await submitHighestMass(state.apiBaseUrl, {
+    if (state.planetName.trim() && (!isPoll || scoreDirty)) {
+      const subRes = await submitHighestMass(state.apiBaseUrl, {
         deviceId: state.deviceId,
         planetName: state.planetName,
         colorId: state.colorId ?? 1,
         mass: state.highestMass,
       });
+      if (subRes.ok) {
+        scoreDirty = false;
+        lastScoreSyncAt = Date.now();
+      }
     }
 
     const res = await fetchGlobalHighscores(state.apiBaseUrl, state.deviceId, 50);
+    if (mySeq !== hsLoadSeq || currentScreen !== 'highscores') return;
     statusEl.textContent = `🌐 Online Leaderboard • ${res.entries.length} planets`;
     renderHighscoreRows(res.entries);
   } catch {
+    if (mySeq !== hsLoadSeq || currentScreen !== 'highscores') return;
     statusEl.textContent = '📱 Offline Mode — Local Highscores';
     renderHighscoreRows(buildLocalFallbackEntry());
   }
@@ -550,8 +632,8 @@ function renderHighscoreRows(entries: HighscoreEntry[]): void {
 function startHighscorePolling(): void {
   stopHighscorePolling();
   hsPollInterval = window.setInterval(() => {
-    if (currentScreen === 'highscores') {
-      void loadHighscores();
+    if (currentScreen === 'highscores' && !document.hidden) {
+      void loadHighscores(true);
     }
   }, 5000);
 }
@@ -561,6 +643,11 @@ function stopHighscorePolling(): void {
     window.clearInterval(hsPollInterval);
     hsPollInterval = null;
   }
+  if (hsTapTimer !== null) {
+    window.clearTimeout(hsTapTimer);
+    hsTapTimer = null;
+  }
+  hsTapCount = 0;
 }
 
 function wireEvents(): void {
@@ -617,7 +704,7 @@ function wireEvents(): void {
 
   document.getElementById('btn-hs-refresh')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    void loadHighscores();
+    void loadHighscores(false);
   });
 
   document.getElementById('hs-heading')!.addEventListener('click', () => {
@@ -645,7 +732,26 @@ function wireEvents(): void {
     saveState(state);
     document.getElementById('hs-config-panel')!.classList.add('hidden');
     updateNameClaimUI();
-    void loadHighscores();
+    void loadHighscores(false);
+  });
+
+  // Flush pending score sync when app is backgrounded, closed, or regains network
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && scoreDirty) {
+      void flushScoreSync();
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (scoreDirty) {
+      void flushScoreSync();
+    }
+  });
+
+  window.addEventListener('online', () => {
+    if (scoreDirty) {
+      void flushScoreSync();
+    }
   });
 }
 

@@ -1,37 +1,157 @@
 import { PlanetColor } from '../data/planets';
 
+export interface PlanetDrawOptions {
+  /** Mass evolution metric: 0 at 0.01 kg, ~3 at 10 kg, ~5 at 1,000 kg, ~8 at 10^6 kg, ~14 at 10^12 kg */
+  evolution?: number;
+  /** Transient tap / meteorite energy flash in [0, 1] */
+  energy?: number;
+  /** Continuous elapsed time in seconds for orbital motion */
+  timeSec?: number;
+}
+
+interface DustSpec {
+  angleOffset: number;
+  orbitScale: number;
+  speed: number;
+  size: number;
+  alpha: number;
+  yJitter: number;
+  useAccent: boolean;
+}
+
+interface MoonSpec {
+  unlockEvo: number;
+  orbitRx: number;
+  orbitRy: number;
+  tilt: number;
+  speed: number;
+  phaseOffset: number;
+  sizeRatio: number;
+  tint: 'silver' | 'accent' | 'gold';
+}
+
+// Precomputed deterministic ring dust particles (zero per-frame allocations)
+const DUST_SPECS: DustSpec[] = Array.from({ length: 28 }, (_, i) => {
+  const s1 = Math.sin(i * 12.9898) * 43758.5453;
+  const s2 = Math.sin(i * 78.233 + 1.7) * 24634.6345;
+  const r1 = s1 - Math.floor(s1);
+  const r2 = s2 - Math.floor(s2);
+  return {
+    angleOffset: (i / 28) * Math.PI * 2 + r1 * 0.35,
+    orbitScale: 1.32 + r1 * 0.42,
+    speed: 0.32 + r2 * 0.28,
+    size: 0.9 + r1 * 1.7,
+    alpha: 0.35 + r2 * 0.55,
+    yJitter: (r1 - 0.5) * 0.09,
+    useAccent: i % 3 !== 0,
+  };
+});
+
+const MOON_SPECS: MoonSpec[] = [
+  {
+    unlockEvo: 4.2,
+    orbitRx: 1.56,
+    orbitRy: 0.42,
+    tilt: -0.24,
+    speed: 0.55,
+    phaseOffset: 0.4,
+    sizeRatio: 0.13,
+    tint: 'silver',
+  },
+  {
+    unlockEvo: 7.0,
+    orbitRx: 1.84,
+    orbitRy: 0.52,
+    tilt: 0.31,
+    speed: -0.38,
+    phaseOffset: 2.6,
+    sizeRatio: 0.105,
+    tint: 'accent',
+  },
+  {
+    unlockEvo: 10.5,
+    orbitRx: 2.08,
+    orbitRy: 0.58,
+    tilt: -0.45,
+    speed: 0.27,
+    phaseOffset: 4.5,
+    sizeRatio: 0.09,
+    tint: 'gold',
+  },
+];
+
 export function drawPlanet(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   radius: number,
   planet: PlanetColor,
-  rotationPhase: number
+  rotationPhase: number,
+  options?: PlanetDrawOptions
 ): void {
+  if (
+    !Number.isFinite(cx) ||
+    !Number.isFinite(cy) ||
+    !Number.isFinite(radius) ||
+    radius <= 0.5
+  ) {
+    return;
+  }
+
+  const evolution = Math.max(0, options?.evolution ?? 0);
+  const energy = Math.max(0, Math.min(1, options?.energy ?? 0));
+  const timeSec = options?.timeSec ?? rotationPhase * 22;
+
   ctx.save();
 
-  // Outer atmospheric glow
+  // 1. Dynamic multi-layered atmospheric halo (grows and brightens with mass & tap energy)
+  const evoFactor = Math.min(1, evolution / 12);
+  const pulseBreath = 1 + Math.sin(timeSec * 1.8) * 0.025 + energy * 0.12;
+  const outerHaloRadius = radius * (1.42 + evoFactor * 0.34) * pulseBreath;
+
   const glowGrad = ctx.createRadialGradient(
     cx,
     cy,
-    radius * 0.78,
+    radius * 0.72,
     cx,
     cy,
-    radius * 1.42
+    outerHaloRadius
   );
   glowGrad.addColorStop(0, planet.glow);
+  if (evoFactor > 0.12 || energy > 0.05) {
+    glowGrad.addColorStop(0.52, planet.glow);
+  }
   glowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.save();
+  ctx.globalAlpha = 0.8 + evoFactor * 0.2 + energy * 0.2;
   ctx.fillStyle = glowGrad;
   ctx.beginPath();
-  ctx.arc(cx, cy, radius * 1.42, 0, Math.PI * 2);
+  ctx.arc(cx, cy, outerHaloRadius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 
-  // Back half of ring if planet has rings
+  // Subtle inner corona ring at higher evolution or tap energy
+  if (evoFactor > 0.25 || energy > 0.08) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.65, evoFactor * 0.28 + energy * 0.42);
+    ctx.strokeStyle = planet.accent;
+    ctx.lineWidth = Math.max(1.2, radius * (0.03 + energy * 0.04));
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * (1.06 + energy * 0.07), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 2. Back half of orbital ring dust & back-side mini-moons (behind planet)
+  drawOrbitalDust(ctx, cx, cy, radius, planet, evolution, timeSec, true);
+  drawOrbitingMoons(ctx, cx, cy, radius, planet, evolution, timeSec, true);
+
+  // Back half of planetary ring if planet has rings
   if (planet.hasRing) {
     drawRingHalf(ctx, cx, cy, radius, planet, true);
   }
 
-  // Main sphere clip
+  // 3. Main sphere clip
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -64,7 +184,7 @@ export function drawPlanet(
     cy,
     radius * 1.05
   );
-  shadowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.18)');
+  shadowGrad.addColorStop(0, `rgba(255, 255, 255, ${0.18 + energy * 0.14})`);
   shadowGrad.addColorStop(0.55, 'rgba(0, 0, 0, 0)');
   shadowGrad.addColorStop(1, 'rgba(2, 6, 23, 0.62)');
   ctx.fillStyle = shadowGrad;
@@ -72,21 +192,165 @@ export function drawPlanet(
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
 
+  // Atmospheric aurora limb glow for evolved planets
+  if (evolution >= 8) {
+    const auroraAlpha = Math.min(0.45, (evolution - 8) * 0.06) + energy * 0.15;
+    ctx.strokeStyle = planet.accent;
+    ctx.globalAlpha = auroraAlpha;
+    ctx.lineWidth = Math.max(2, radius * 0.08);
+    ctx.lineCap = 'round';
+    const arcSpin = timeSec * 0.35;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.92, -2.5 + Math.sin(arcSpin) * 0.2, -1.2 + Math.sin(arcSpin) * 0.2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   // Crisp subtle rim highlight
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-  ctx.lineWidth = Math.max(1, radius * 0.025);
+  ctx.strokeStyle = energy > 0.1 ? planet.accent : 'rgba(255, 255, 255, 0.24)';
+  ctx.globalAlpha = 0.26 + energy * 0.45;
+  ctx.lineWidth = Math.max(1, radius * 0.026);
   ctx.beginPath();
   ctx.arc(cx, cy, radius - ctx.lineWidth * 0.5, 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.restore();
 
-  // Front half of ring
+  // 4. Front half of planetary ring
   if (planet.hasRing) {
     drawRingHalf(ctx, cx, cy, radius, planet, false);
   }
 
+  // 5. Front half of orbital ring dust & front-side mini-moons (in front of planet)
+  drawOrbitalDust(ctx, cx, cy, radius, planet, evolution, timeSec, false);
+  drawOrbitingMoons(ctx, cx, cy, radius, planet, evolution, timeSec, false);
+
   ctx.restore();
+}
+
+function drawOrbitalDust(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  planet: PlanetColor,
+  evolution: number,
+  timeSec: number,
+  isBack: boolean
+): void {
+  if (evolution < 2.8 || radius < 28) return;
+  const maxDust = Math.min(DUST_SPECS.length, Math.floor((evolution - 2.3) * 3.5));
+  if (maxDust <= 0) return;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-0.24);
+
+  for (let i = 0; i < maxDust; i++) {
+    const d = DUST_SPECS[i];
+    const angle = d.angleOffset + timeSec * d.speed;
+    const sinA = Math.sin(angle);
+    const behind = sinA < 0;
+    if (behind !== isBack) continue;
+
+    const rx = radius * d.orbitScale;
+    const ry = radius * (d.orbitScale * 0.24 + d.yJitter);
+    const px = Math.cos(angle) * rx;
+    const py = sinA * ry;
+    const depthAlpha = behind ? 0.45 : 0.95;
+
+    ctx.globalAlpha = d.alpha * depthAlpha;
+    ctx.fillStyle = d.useAccent ? planet.accent : '#f8fafc';
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.9, (radius / 90) * d.size), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawOrbitingMoons(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  planet: PlanetColor,
+  evolution: number,
+  timeSec: number,
+  isBack: boolean
+): void {
+  if (radius < 24) return;
+
+  for (const moon of MOON_SPECS) {
+    if (evolution < moon.unlockEvo) continue;
+    const fadeIn = Math.min(1, (evolution - moon.unlockEvo + 0.4) * 0.9);
+    const angle = moon.phaseOffset + timeSec * moon.speed;
+    const sinA = Math.sin(angle);
+    const behind = sinA < 0;
+    if (behind !== isBack) continue;
+
+    const cosT = Math.cos(moon.tilt);
+    const sinT = Math.sin(moon.tilt);
+    const lx = Math.cos(angle) * radius * moon.orbitRx;
+    const ly = sinA * radius * moon.orbitRy;
+
+    const mx = cx + lx * cosT - ly * sinT;
+    const my = cy + lx * sinT + ly * cosT;
+    const mr = Math.max(3, radius * moon.sizeRatio * fadeIn);
+
+    ctx.save();
+    ctx.globalAlpha = (behind ? 0.72 : 1) * fadeIn;
+
+    // Faint moon glow
+    const mGlow = ctx.createRadialGradient(mx, my, mr * 0.4, mx, my, mr * 2.1);
+    const primaryCol =
+      moon.tint === 'gold'
+        ? '#fde047'
+        : moon.tint === 'accent'
+        ? planet.accent
+        : '#e2e8f0';
+    const darkCol =
+      moon.tint === 'gold'
+        ? '#854d0e'
+        : moon.tint === 'accent'
+        ? planet.secondary
+        : '#475569';
+
+    mGlow.addColorStop(0, primaryCol);
+    mGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = mGlow;
+    ctx.globalAlpha *= 0.35;
+    ctx.beginPath();
+    ctx.arc(mx, my, mr * 2.1, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Shaded moon sphere
+    ctx.globalAlpha = (behind ? 0.78 : 1) * fadeIn;
+    const mGrad = ctx.createRadialGradient(
+      mx - mr * 0.35,
+      my - mr * 0.35,
+      mr * 0.1,
+      mx + mr * 0.15,
+      my + mr * 0.15,
+      mr * 1.15
+    );
+    mGrad.addColorStop(0, '#ffffff');
+    mGrad.addColorStop(0.42, primaryCol);
+    mGrad.addColorStop(1, darkCol);
+    ctx.fillStyle = mGrad;
+    ctx.beginPath();
+    ctx.arc(mx, my, mr, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny crater detail on moon
+    ctx.fillStyle = darkCol;
+    ctx.globalAlpha *= 0.4;
+    ctx.beginPath();
+    ctx.arc(mx + mr * 0.22, my + mr * 0.16, mr * 0.24, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
 }
 
 function drawRingHalf(

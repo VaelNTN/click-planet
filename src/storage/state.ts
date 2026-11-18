@@ -23,13 +23,29 @@ function generateFallbackDeviceId(): string {
   return `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function safeGetStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage quota or restricted webview errors
+  }
+}
+
 export async function resolveDeviceId(): Promise<string> {
-  const cached = localStorage.getItem(DEVICE_KEY);
+  const cached = safeGetStorage(DEVICE_KEY);
   try {
     const info = await Device.getId();
     if (info?.identifier && info.identifier.trim().length >= 4) {
       const id = `phone-${info.identifier.trim()}`;
-      localStorage.setItem(DEVICE_KEY, id);
+      safeSetStorage(DEVICE_KEY, id);
       return id;
     }
   } catch {
@@ -40,7 +56,7 @@ export async function resolveDeviceId(): Promise<string> {
     return cached;
   }
   const fresh = generateFallbackDeviceId();
-  localStorage.setItem(DEVICE_KEY, fresh);
+  safeSetStorage(DEVICE_KEY, fresh);
   return fresh;
 }
 
@@ -59,7 +75,7 @@ export function loadSavedState(deviceId: string): GameState {
   };
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetStorage(STORAGE_KEY);
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<GameState>;
     const mass = parsed.mass
@@ -68,14 +84,19 @@ export function loadSavedState(deviceId: string): GameState {
     const highest = parsed.highestMass
       ? maxMass(mass, normalizeMass(Number(parsed.highestMass.m), Number(parsed.highestMass.e)))
       : { ...mass };
+    const rawClicks = Number(parsed.clickCount);
+    const clickCount = Number.isFinite(rawClicks) ? Math.max(0, Math.trunc(rawClicks)) : 0;
 
     return {
       deviceId,
       mass,
       highestMass: highest,
-      clickCount: Math.max(0, Math.trunc(Number(parsed.clickCount || 0))),
+      clickCount,
       colorId:
-        typeof parsed.colorId === 'number' && parsed.colorId >= 0 && parsed.colorId < 20
+        typeof parsed.colorId === 'number' &&
+        Number.isInteger(parsed.colorId) &&
+        parsed.colorId >= 0 &&
+        parsed.colorId < 20
           ? parsed.colorId
           : null,
       planetName: typeof parsed.planetName === 'string' ? parsed.planetName : '',
@@ -92,9 +113,5 @@ export function loadSavedState(deviceId: string): GameState {
 }
 
 export function saveState(state: GameState): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore storage quota errors
-  }
+  safeSetStorage(STORAGE_KEY, JSON.stringify(state));
 }
