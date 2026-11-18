@@ -1030,6 +1030,22 @@ export class PlanetStage {
     ctx.arc(m.x, m.y, r * 1.95 * haloPulse, 0, Math.PI * 2);
     ctx.fill();
 
+    // Glowing leading bow-shock arc along velocity vector
+    if (!m.absorbing) {
+      const moveAngle = Math.atan2(m.vy, m.vx);
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.rotate(moveAngle);
+      ctx.strokeStyle = '#ffffff';
+      ctx.globalAlpha = 0.72;
+      ctx.lineWidth = Math.max(1.4, r * 0.14);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.18, -Math.PI * 0.36, Math.PI * 0.36);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Jagged rocky body
     ctx.globalAlpha = 1;
     ctx.translate(m.x, m.y);
@@ -1053,7 +1069,24 @@ export class PlanetStage {
     ctx.fillStyle = rockGrad;
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+    // Inner rocky craters & glowing fracture line
+    ctx.fillStyle = 'rgba(41, 16, 4, 0.48)';
+    ctx.beginPath();
+    ctx.arc(-r * 0.22, r * 0.18, r * 0.2, 0, Math.PI * 2);
+    ctx.arc(r * 0.28, -r * 0.16, r * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#fef9c3';
+    ctx.globalAlpha = 0.65;
+    ctx.lineWidth = Math.max(0.8, r * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.32, -r * 0.28);
+    ctx.lineTo(0, -r * 0.02);
+    ctx.lineTo(r * 0.25, r * 0.22);
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 

@@ -283,7 +283,18 @@ function startHomePreview(): void {
     ctx.clearRect(0, 0, size, size);
     const planet = getPlanetColor(state.colorId ?? 1);
     const evolution = Math.max(0, getMassLog10(state.highestMass) + 2);
-    const baseR = evolution >= 4.2 ? (planet.hasRing ? 38 : 40) : planet.hasRing ? 46 : 56;
+    const baseR =
+      evolution >= 3.8
+        ? planet.hasRing
+          ? 37
+          : 39
+        : evolution >= 2.1
+        ? planet.hasRing
+          ? 42
+          : 46
+        : planet.hasRing
+        ? 46
+        : 56;
     drawPlanet(ctx, size / 2, size / 2, baseR, planet, phase, {
       evolution,
       timeSec: elapsed,
