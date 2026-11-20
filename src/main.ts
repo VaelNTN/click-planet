@@ -37,6 +37,69 @@ let hsLoadSeq = 0;
 let homeAnimId: number | null = null;
 let hsTapCount = 0;
 let hsTapTimer: number | null = null;
+let confirmQuitArmed = false;
+
+// Tap Combo & Golden Meteor Shower state
+let comboCharge = 0;
+let comboDecayInterval: number | null = null;
+let milestoneBannerTimer: number | null = null;
+let lastMilestoneTier = 0;
+
+const COSMIC_MILESTONES: { evo: number; label: string }[] = [
+  { evo: 1.0, label: '✨ Atmosphere Formed!' },
+  { evo: 2.1, label: '🛰️ First Orbital Satellite Unlocked!' },
+  { evo: 3.0, label: '💫 Planetary Ring System Unlocked!' },
+  { evo: 3.8, label: '🌕 Twin Moons Captured!' },
+  { evo: 5.0, label: '🪐 Gas Giant Ascendance!' },
+  { evo: 7.0, label: '☀️ Stellar Core Ignited!' },
+];
+
+function getMilestoneTier(evo: number): number {
+  let tier = 0;
+  for (let i = 0; i < COSMIC_MILESTONES.length; i++) {
+    if (evo >= COSMIC_MILESTONES[i].evo) tier = i + 1;
+  }
+  return tier;
+}
+
+function showMilestoneBanner(text: string): void {
+  const el = document.getElementById('milestone-banner');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('hidden');
+  if (milestoneBannerTimer !== null) window.clearTimeout(milestoneBannerTimer);
+  milestoneBannerTimer = window.setTimeout(() => {
+    el.classList.add('hidden');
+    milestoneBannerTimer = null;
+  }, 3200);
+}
+
+function updateComboUI(): void {
+  const fill = document.getElementById('combo-fill');
+  const label = document.getElementById('combo-label');
+  if (fill) fill.style.width = `${Math.round(comboCharge)}%`;
+  if (label) {
+    label.textContent =
+      comboCharge >= 75
+        ? '☄️ Almost Meteor Shower! Keep tapping!'
+        : comboCharge >= 25
+        ? `⚡ Cosmic Charge: ${Math.round(comboCharge)}%`
+        : 'Tap rapidly to trigger a Golden Meteor Shower!';
+  }
+}
+
+function checkEvolutionMilestones(): void {
+  const evo = Math.max(0, getMassLog10(state.mass) + 2);
+  const tier = getMilestoneTier(evo);
+  if (tier > lastMilestoneTier) {
+    const unlocked = COSMIC_MILESTONES[tier - 1];
+    lastMilestoneTier = tier;
+    if (unlocked) {
+      showMilestoneBanner(unlocked.label);
+      stage?.triggerMilestoneCelebration();
+    }
+  }
+}
 
 function renderMassHtml(m: number, e: number): string {
   const parts = formatMassParts({ m, e });
@@ -65,16 +128,24 @@ function buildApp(): void {
   app.innerHTML = `
     <!-- HOME SCREEN -->
     <section id="screen-home" class="screen home-screen">
-      <div class="home-hero">
-        <canvas id="home-planet-canvas" class="home-planet-canvas"></canvas>
-        <h1 class="game-title">Click Planet</h1>
-        <p class="game-subtitle">Tap planets &amp; catch meteorites.</p>
-        <div id="home-save-pill" class="home-save-pill hidden"></div>
+      <div class="home-topbar">
+        <button id="btn-home-more" class="btn btn-small">✨ More Games</button>
+        <button id="btn-home-sound" class="btn btn-small" aria-label="Toggle sound">🔊</button>
       </div>
-      <div class="home-actions">
-        <button id="btn-home-play" class="btn btn-primary">Play</button>
-        <button id="btn-home-colors" class="btn btn-secondary">Planet Colors</button>
-        <button id="btn-home-highscores" class="btn btn-secondary">Leaderboard</button>
+      <div class="home-content">
+        <div class="home-hero">
+          <canvas id="home-planet-canvas" class="home-planet-canvas"></canvas>
+          <h1 class="game-title">Click Planet</h1>
+          <p class="game-subtitle">Tap to grow cosmic mass &amp; catch golden meteor showers.</p>
+          <div id="home-save-pill" class="home-save-pill hidden"></div>
+        </div>
+        <div class="home-actions">
+          <button id="btn-home-play" class="btn btn-primary">▶ Play</button>
+          <div class="home-secondary-row">
+            <button id="btn-home-colors" class="btn btn-secondary">🪐 Colors</button>
+            <button id="btn-home-highscores" class="btn btn-secondary">🏆 Ranks</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -93,9 +164,9 @@ function buildApp(): void {
     <section id="screen-game" class="screen game-screen hidden">
       <header class="game-header">
         <div class="game-nav-row">
-          <button id="btn-game-menu" class="btn btn-small">← Menu</button>
+          <button id="btn-game-pause" class="btn btn-small">⏸ Pause</button>
           <div class="game-nav-right">
-            <button id="btn-game-colors" class="btn btn-small">Colors</button>
+            <button id="btn-game-colors" class="btn btn-small">🪐 Colors</button>
             <button id="btn-game-sound" class="btn btn-small">🔊 On</button>
           </div>
         </div>
@@ -104,10 +175,15 @@ function buildApp(): void {
           <span class="mass-label">Mass</span>
           <div id="mass-value" class="mass-value">0.01 kg</div>
           <div id="mass-rate-badge" class="mass-rate-badge">First 10 taps: +4–5 kg (0/10)</div>
+          <div class="combo-wrap">
+            <div class="combo-track"><div id="combo-fill" class="combo-fill"></div></div>
+            <div id="combo-label" class="combo-label">Tap rapidly to trigger a Golden Meteor Shower!</div>
+          </div>
         </div>
       </header>
 
       <div class="stage-wrap">
+        <div id="milestone-banner" class="milestone-banner hidden"></div>
         <canvas id="planet-stage-canvas" class="stage-canvas"></canvas>
       </div>
     </section>
@@ -154,6 +230,54 @@ function buildApp(): void {
 
       <div id="hs-list" class="hs-list"></div>
     </section>
+
+    <!-- PAUSE MODAL -->
+    <div id="pause-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <h3 class="modal-title">⏸ Orbit Paused</h3>
+        <p class="modal-sub">Your planet mass is automatically saved.</p>
+        <button id="btn-pause-resume" class="btn btn-primary">▶ Resume</button>
+        <button id="btn-pause-colors" class="btn btn-secondary">🪐 Change Planet Style</button>
+        <button id="btn-pause-hs" class="btn btn-secondary">🏆 Leaderboard</button>
+        <button id="btn-pause-menu" class="btn btn-danger">🚪 Back to Menu</button>
+      </div>
+    </div>
+
+    <!-- MORE GAMES MODAL -->
+    <div id="more-games-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <h3 class="modal-title">✨ More by VaelNTN</h3>
+        <p class="modal-sub">Discover more handcrafted games from VaelNTN Studios.</p>
+        <div class="more-games-list">
+          <a class="more-game-item featured" href="https://github.com/VaelNTN/starforge-survivors/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">⭐ Starforge Survivors</div>
+              <div class="more-game-desc">Flagship sci-fi roguelite — 6 heroes, 6 bosses &amp; zero ads</div>
+            </div>
+            <span class="more-game-badge">FLAGSHIP</span>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/arcade-100-hub/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">🕹️ Arcade 100 Hub</div>
+              <div class="more-game-desc">100 instant retro mini-games in one app</div>
+            </div>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/pocket-tanks-duel/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">💥 Matey Tanks</div>
+              <div class="more-game-desc">Artillery physics with wind &amp; mana arsenal</div>
+            </div>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/frog-parkour/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">🐸 Frog Parkour</div>
+              <div class="more-game-desc">Tongue-grapple pond jumping action</div>
+            </div>
+          </a>
+        </div>
+        <button id="btn-more-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
   `;
 
   populateColorGrid();
@@ -204,9 +328,26 @@ function updateColorGridSelection(): void {
   });
 }
 
+function openPauseModal(): void {
+  if (currentScreen !== 'game') return;
+  stage?.setPaused(true);
+  confirmQuitArmed = false;
+  const quitBtn = document.getElementById('btn-pause-menu');
+  if (quitBtn) quitBtn.textContent = '🚪 Back to Menu';
+  document.getElementById('pause-modal')?.classList.remove('hidden');
+}
+
+function closePauseModal(resume = true): void {
+  document.getElementById('pause-modal')?.classList.add('hidden');
+  confirmQuitArmed = false;
+  if (resume) stage?.setPaused(false);
+}
+
 function showScreen(target: ScreenName): void {
   const prevScreen = currentScreen;
   currentScreen = target;
+  closePauseModal(false);
+  document.getElementById('more-games-modal')?.classList.add('hidden');
   const screens: Record<ScreenName, HTMLElement> = {
     home: document.getElementById('screen-home')!,
     colors: document.getElementById('screen-colors')!,
@@ -323,9 +464,30 @@ function refreshHomeSummary(): void {
   }
 }
 
+function startComboDecay(): void {
+  if (comboDecayInterval !== null) return;
+  comboDecayInterval = window.setInterval(() => {
+    if (currentScreen !== 'game' || stage?.isPaused()) return;
+    if (comboCharge > 0) {
+      comboCharge = Math.max(0, comboCharge - 3.2);
+      updateComboUI();
+    }
+  }, 150);
+}
+
+function stopComboDecay(): void {
+  if (comboDecayInterval !== null) {
+    window.clearInterval(comboDecayInterval);
+    comboDecayInterval = null;
+  }
+}
+
 function startGameStage(): void {
   const canvas = document.getElementById('planet-stage-canvas') as HTMLCanvasElement;
   const planet = getPlanetColor(state.colorId ?? 1);
+  lastMilestoneTier = getMilestoneTier(Math.max(0, getMassLog10(state.mass) + 2));
+  startComboDecay();
+  updateComboUI();
 
   if (stage) {
     stage.setPlanet(planet);
@@ -347,6 +509,16 @@ function startGameStage(): void {
         stage?.setMass(state.mass);
         soundFX.playPlanetTap();
         updateMassDisplay();
+        checkEvolutionMilestones();
+
+        comboCharge = Math.min(100, comboCharge + 8.5);
+        if (comboCharge >= 100) {
+          comboCharge = 0;
+          stage?.triggerMeteorShower(4);
+          showMilestoneBanner('☄️ GOLDEN METEOR SHOWER!');
+        }
+        updateComboUI();
+
         scheduleScoreSync(1600);
         return formatDeltaShort(deltaMass);
       },
@@ -358,6 +530,7 @@ function startGameStage(): void {
         stage?.setMass(state.mass);
         soundFX.playMeteorAbsorb();
         updateMassDisplay();
+        checkEvolutionMilestones();
         scheduleScoreSync(1000);
         return formatDeltaShort(deltaMass);
       },
@@ -368,6 +541,7 @@ function startGameStage(): void {
 }
 
 function stopGameStage(): void {
+  stopComboDecay();
   if (stage) {
     stage.stop();
   }
@@ -388,10 +562,16 @@ function updateMassDisplay(): void {
   }
 }
 
+function syncSoundButtons(): void {
+  const soundBtn = document.getElementById('btn-game-sound');
+  if (soundBtn) soundBtn.textContent = state.soundEnabled ? '🔊 On' : '🔇 Off';
+  const homeSoundBtn = document.getElementById('btn-home-sound');
+  if (homeSoundBtn) homeSoundBtn.textContent = state.soundEnabled ? '🔊' : '🔇';
+}
+
 function updateGameUI(): void {
   updateMassDisplay();
-  const soundBtn = document.getElementById('btn-game-sound')!;
-  soundBtn.textContent = state.soundEnabled ? '🔊 On' : '🔇 Off';
+  syncSoundButtons();
 }
 
 function updateNameClaimUI(): void {
@@ -662,9 +842,35 @@ function stopHighscorePolling(): void {
 }
 
 function wireEvents(): void {
+  const toggleSound = () => {
+    state.soundEnabled = !state.soundEnabled;
+    soundFX.enabled = state.soundEnabled;
+    saveState(state);
+    soundFX.playUiTap();
+    syncSoundButtons();
+  };
+
   document.getElementById('btn-home-play')!.addEventListener('click', () => {
     soundFX.playUiTap();
     showScreen('game');
+  });
+
+  document.getElementById('btn-home-sound')!.addEventListener('click', toggleSound);
+
+  document.getElementById('btn-home-more')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    document.getElementById('more-games-modal')?.classList.remove('hidden');
+  });
+
+  document.getElementById('btn-more-close')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    document.getElementById('more-games-modal')?.classList.add('hidden');
+  });
+
+  document.getElementById('more-games-modal')!.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+      document.getElementById('more-games-modal')?.classList.add('hidden');
+    }
   });
 
   document.getElementById('btn-home-colors')!.addEventListener('click', () => {
@@ -683,9 +889,45 @@ function wireEvents(): void {
     showScreen(colorsReturnScreen);
   });
 
-  document.getElementById('btn-game-menu')!.addEventListener('click', () => {
+  document.getElementById('btn-game-pause')!.addEventListener('click', () => {
     soundFX.playUiTap();
+    openPauseModal();
+  });
+
+  document.getElementById('btn-pause-resume')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    closePauseModal(true);
+  });
+
+  document.getElementById('btn-pause-colors')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    closePauseModal(false);
+    colorsReturnScreen = 'game';
+    showScreen('colors');
+  });
+
+  document.getElementById('btn-pause-hs')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    closePauseModal(false);
+    showScreen('highscores');
+  });
+
+  document.getElementById('btn-pause-menu')!.addEventListener('click', () => {
+    const btn = document.getElementById('btn-pause-menu')!;
+    soundFX.playUiTap();
+    if (!confirmQuitArmed) {
+      confirmQuitArmed = true;
+      btn.textContent = '⚠ Tap again to Menu';
+      return;
+    }
     showScreen('home');
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && currentScreen === 'game') {
+      if (stage?.isPaused()) closePauseModal(true);
+      else openPauseModal();
+    }
   });
 
   document.getElementById('btn-game-colors')!.addEventListener('click', () => {
@@ -694,13 +936,7 @@ function wireEvents(): void {
     showScreen('colors');
   });
 
-  document.getElementById('btn-game-sound')!.addEventListener('click', () => {
-    state.soundEnabled = !state.soundEnabled;
-    soundFX.enabled = state.soundEnabled;
-    saveState(state);
-    soundFX.playUiTap();
-    updateGameUI();
-  });
+  document.getElementById('btn-game-sound')!.addEventListener('click', toggleSound);
 
   document.getElementById('name-claim-form')!.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -772,6 +1008,7 @@ async function bootstrap(): Promise<void> {
   soundFX.enabled = state.soundEnabled;
 
   buildApp();
+  syncSoundButtons();
   showScreen('home');
 
   if (state.apiBaseUrl) {

@@ -130,6 +130,7 @@ export class PlanetStage {
   private lastTime = 0;
   private elapsedSec = 0;
   private active = false;
+  private paused = false;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -165,11 +166,54 @@ export class PlanetStage {
 
   public setMass(mass: BigMass): void {
     this.massEvolution = Math.max(0, getMassLog10(mass) + 2);
+    this.updatePlanetMetrics();
+  }
+
+  public setPaused(p: boolean): void {
+    this.paused = p;
+    if (!p) this.lastTime = performance.now();
+  }
+
+  public isPaused(): boolean {
+    return this.paused;
+  }
+
+  public triggerMeteorShower(count = 4): void {
+    for (let i = 0; i < count; i++) {
+      this.spawnMeteorite(true);
+    }
+    this.triggerPulse(0.8, 0.5, 3.5, '#facc15');
+    this.pushShockwave({
+      x: this.planetCx,
+      y: this.planetCy,
+      radius: this.basePlanetRadius * 0.9,
+      maxRadius: this.basePlanetRadius * 2.3,
+      life: 0,
+      maxLife: 0.65,
+      color: '#fde047',
+      dual: true,
+    });
+  }
+
+  public triggerMilestoneCelebration(): void {
+    this.spawnBurst(this.planetCx, this.planetCy, '#fde047', 34, true);
+    this.pushShockwave({
+      x: this.planetCx,
+      y: this.planetCy,
+      radius: this.basePlanetRadius * 0.8,
+      maxRadius: this.basePlanetRadius * 2.5,
+      life: 0,
+      maxLife: 0.72,
+      color: '#38bdf8',
+      dual: true,
+    });
+    this.triggerPulse(1.1, 0.65, 4.0, '#38bdf8');
   }
 
   public start(): void {
     if (this.active) return;
     this.active = true;
+    this.paused = false;
     this.handleResize();
     window.addEventListener('resize', this.handleResize);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
@@ -188,6 +232,7 @@ export class PlanetStage {
 
   public stop(): void {
     this.active = false;
+    this.paused = false;
     window.removeEventListener('resize', this.handleResize);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown);
@@ -218,6 +263,16 @@ export class PlanetStage {
     }
   }
 
+  private updatePlanetMetrics(): void {
+    if (this.width <= 0 || this.height <= 0) return;
+    this.planetCx = this.width * 0.5;
+    this.planetCy = this.height * 0.5;
+    const minDim = Math.min(this.width, this.height);
+    // Keep rings & orbiting satellites safely inside short landscape viewports
+    const orbitFactor = this.massEvolution >= 3.8 ? 0.2 : this.massEvolution >= 2.1 ? 0.22 : 0.245;
+    this.basePlanetRadius = Math.max(38, Math.min(112, minDim * orbitFactor));
+  }
+
   private handleResize(): void {
     // clientWidth/clientHeight stay accurate even during CSS transform: scale() transitions
     const rect = this.canvas.getBoundingClientRect();
@@ -243,13 +298,7 @@ export class PlanetStage {
     this.canvas.width = targetW;
     this.canvas.height = targetH;
 
-    this.planetCx = this.width * 0.5;
-    this.planetCy = this.height * 0.5;
-    this.basePlanetRadius = Math.max(
-      58,
-      Math.min(this.width, this.height) * 0.25
-    );
-
+    this.updatePlanetMetrics();
     this.initStars();
   }
 
@@ -345,6 +394,7 @@ export class PlanetStage {
   }
 
   private handlePointerDown(ev: PointerEvent): void {
+    if (this.paused) return;
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
     if (this.width <= 0 || this.height <= 0) return;
 
@@ -467,7 +517,7 @@ export class PlanetStage {
     this.particles.push(p);
   }
 
-  private spawnMeteorite(): void {
+  private spawnMeteorite(golden = false): void {
     if (this.width < 100 || this.height < 100) return;
     const fromLeft = Math.random() < 0.5;
     const margin = 54;
@@ -492,9 +542,9 @@ export class PlanetStage {
     const dx = endX - startX;
     const dy = endY - startY;
     const len = Math.hypot(dx, dy) || 1;
-    const speed = 108 + Math.random() * 84;
+    const speed = golden ? 90 + Math.random() * 65 : 108 + Math.random() * 84;
 
-    const radius = 16 + Math.random() * 7;
+    const radius = golden ? 19 + Math.random() * 6 : 16 + Math.random() * 7;
     const vertices: number[] = [];
     const numVerts = 8;
     for (let i = 0; i < numVerts; i++) {
@@ -510,11 +560,11 @@ export class PlanetStage {
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       radius,
-      hitRadius: radius + 22,
+      hitRadius: radius + (golden ? 28 : 22),
       angle: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 3.2,
       vertices,
-      hue: hues[Math.floor(Math.random() * hues.length)],
+      hue: golden ? '#fde047' : hues[Math.floor(Math.random() * hues.length)],
       absorbing: false,
       absorbT: 0,
       startX,
@@ -579,11 +629,13 @@ export class PlanetStage {
   private loop(now: number): void {
     if (!this.active) return;
     const rawDt = (now - this.lastTime) / 1000;
-    const dt = Number.isFinite(rawDt) ? Math.min(0.05, Math.max(0.001, rawDt)) : 0.016;
+    const dt = this.paused ? 0 : (Number.isFinite(rawDt) ? Math.min(0.05, Math.max(0.001, rawDt)) : 0.016);
     this.lastTime = now;
     this.elapsedSec += dt;
 
-    this.update(dt);
+    if (!this.paused) {
+      this.update(dt);
+    }
     this.render(this.elapsedSec);
 
     this.rafId = requestAnimationFrame(this.loop);
